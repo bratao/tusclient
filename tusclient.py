@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import base64
@@ -45,15 +46,25 @@ def parse_rfc_7231_datatime(string):
 
 
 class TusClient(object):
-    upload_finished = False
     version = '1.0.0'
+    upload_finished = False
+    upload_max_chunk = 2 ** 10   # 2k
+    extensions = [
+        'creation',
+        'expiration',
+        'termination',
+        # 'checksum',                  # todo
+        # 'creation-defer-length',     # todo
+        # 'checksum-trailer',          # todo
+        # 'concatenation',             # todo
+        # 'concatenation-unfinished',  # todo
+    ]
 
-    def __init__(self, fpath, upload_url, tmp_dir='/tmp/upload', upload_max_chunk=2**10, upload_metadata=None):
+    def __init__(self, fpath, upload_url, tmp_dir='/tmp/upload', upload_metadata=None):
         self.fpath = os.path.abspath(fpath)
         self.tmp_dir = tmp_dir
         self.info_path = os.path.join(tmp_dir, base64.standard_b64encode(fpath.encode()))
         self.upload_url = upload_url
-        self.upload_max_chunk = upload_max_chunk
         assert upload_metadata is None or isinstance(upload_metadata, dict)
         self.upload_metadata = upload_metadata or dict()
         self.values = dict()
@@ -167,10 +178,11 @@ class TusClient(object):
             'Content-Type': 'application/offset+octet-stream',
             'Upload-Offset': self.values['upload_offset'],
         }
-        with open(self.fpath, 'rb') as f:
-            f.seek(self.values['upload_offset'], os.SEEK_SET)
-            data = f.read(self.upload_max_chunk)
-        resp = requests.patch(url, data=data, headers=headers)
+        # with open(self.fpath, 'rb') as f:
+        #     f.seek(self.values['upload_offset'], os.SEEK_SET)
+        #     data = f.read(self.upload_max_chunk)
+        if 'checksum' not in self.extensions:
+            resp = requests.patch(url, data=open(self.fpath, 'rb'), headers=headers)
         if resp.status_code == httplib.NO_CONTENT:
             self.update_offset(resp)
             self.update_expires(resp)
