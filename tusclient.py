@@ -51,6 +51,7 @@ class TusClient(object):
     def __init__(self, fpath, upload_url, tmp_dir='/tmp/upload', upload_max_chunk=2**10, upload_metadata=None):
         self.fpath = os.path.abspath(fpath)
         self.tmp_dir = tmp_dir
+        self.info_path = os.path.join(tmp_dir, base64.standard_b64encode(fpath.encode()))
         self.upload_url = upload_url
         self.upload_max_chunk = upload_max_chunk
         assert upload_metadata is None or isinstance(upload_metadata, dict)
@@ -69,6 +70,7 @@ class TusClient(object):
                 self.create_file()
             while not self.upload_finished:
                 self.upload_file_chunk()
+                import pdb; pdb.set_trace()
         except ClientError as e:
             logger.exception('Server return: %s %s', e.status_code, e.reason)
         except Error:
@@ -154,7 +156,7 @@ class TusClient(object):
         self.update_length(resp)
 
     def upload_file_chunk(self):
-        with open(self.get_info_path(), 'r') as f:
+        with open(self.info_path, 'r') as f:
             info = json.load(f)
         if self.fpath != info['fpath'] or os.stat(self.fpath).st_mtime != info['last_modify']:
             raise Error('File changed when uploading')
@@ -218,8 +220,7 @@ class TusClient(object):
         self.values['info']['expires'] = parse_rfc_7231_datatime(expires)
 
     def update_info_file(self):
-        info_path = self.get_info_path()
-        with open(info_path, 'w') as f:
+        with open(self.info_path, 'w') as f:
             json.dump(self.values['info'], f, indent=4)
 
     def cancel_upload(self):
@@ -248,18 +249,10 @@ class TusClient(object):
         return False
 
     def clean_info_file(self):
-        info_path = self.get_info_path()
-        if info_path:
-            try:
-                os.remove(info_path)
-            except:
-                pass
+        try:
+            os.remove(self.info_path)
+        except OSError:
+            pass
 
     def get_resource_url(self):
         return self.values['info']['location']
-
-    def get_info_path(self):
-        if 'info' not in self.values:
-            return
-        return os.path.join(self.tmp_dir,
-                            os.path.basename(urlparse(self.values['info']['location']).path)+'.info')
