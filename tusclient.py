@@ -69,7 +69,6 @@ class TusClient(object):
                 self.create_file()
             while not self.upload_finished:
                 self.upload_file_chunk()
-                import pdb; pdb.set_trace()
         except ClientError as e:
             logger.exception('Server return: %s %s', e.status_code, e.reason)
         except Error:
