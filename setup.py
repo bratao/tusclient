@@ -9,7 +9,7 @@ with open(os.path.join(here, 'README.md')) as f:
 
 setup(
     name='tusclient',
-    version='0.1.1',
+    version='0.1.2',
     description='python client for tus protocol 1.0.0',
     long_description=long_description,
     url='https://github.com/everydo/tusclient',
