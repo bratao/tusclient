@@ -1,5 +1,4 @@
 import os
-import sys
 import json
 import time
 import base64
@@ -81,7 +80,6 @@ class TusClient(object):
                 self.create_file()
             while not self.upload_finished:
                 self.upload_file_chunk()
-                import pdb; pdb.set_trace()
         except ClientError as e:
             logger.exception('Server return: %s %s', e.status_code, e.reason)
         except Error:
@@ -89,10 +87,7 @@ class TusClient(object):
         self.clean_info_file()
 
     def check_upload(self):
-        headers = {
-            'Tus-Resumable': self.version,
-        }
-        resp = requests.options(self.upload_url, headers=headers)
+        resp = requests.options(self.upload_url)
         if resp.status_code != httplib.NO_CONTENT:
             raise ClientError(resp.status_code, resp.reason)
 
