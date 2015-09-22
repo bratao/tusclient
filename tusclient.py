@@ -3,6 +3,7 @@ import json
 import time
 import base64
 import logging
+import hashlib
 import httplib
 import requests
 from urlparse import urlparse, urlunparse
@@ -47,12 +48,13 @@ def parse_rfc_7231_datatime(string):
 class TusClient(object):
     version = '1.0.0'
     upload_finished = False
-    upload_max_chunk = 2 ** 10   # 2k
+    upload_max_chunk = 2 ** 10   # 2K
+    checksum_algorisum = 'sha1'
     extensions = [
         'creation',
         'expiration',
         'termination',
-        # 'checksum',                  # todo
+        'checksum',
         # 'creation-defer-length',     # todo
         # 'checksum-trailer',          # todo
         # 'concatenation',             # todo
@@ -173,11 +175,18 @@ class TusClient(object):
             'Content-Type': 'application/offset+octet-stream',
             'Upload-Offset': self.values['upload_offset'],
         }
-        # with open(self.fpath, 'rb') as f:
-        #     f.seek(self.values['upload_offset'], os.SEEK_SET)
-        #     data = f.read(self.upload_max_chunk)
-        if 'checksum' not in self.extensions:
-            resp = requests.patch(url, data=open(self.fpath, 'rb'), headers=headers)
+
+        server_conf = self.values['server_conf']
+        with open(self.fpath, 'rb') as f:
+            f.seek(self.values['upload_offset'], os.SEEK_SET)
+            if 'checksum' in server_conf['tus_extensions']:
+                data = f.read(self.upload_max_chunk)
+                checksum = hashlib.sha1(data).digest()
+                headers['Upload-Checksum'] = self.checksum_algorisum + ' ' + base64.standard_b64encode(checksum)
+            else:
+                data = f.read()
+
+        resp = requests.patch(url, data=data, headers=headers)
         if resp.status_code == httplib.NO_CONTENT:
             self.update_offset(resp)
             self.update_expires(resp)
