@@ -17,16 +17,16 @@ install
 arguments
 ---------
 
-``fpath``
+fpath
     ``str``, required, path of upload file
 
-``upload_url``
+upload_url
     ``str``, required, url for the resumable upload service
 
-``tmp_dir``
+tmp_dir
     ``str``, optional, directory to store temporary files, default ``/tmp/upload``
 
-``upload_metadata``
+upload_metadata
     ``dict``, optional, Tus ``Upload-Metadata``, default ``None``
 
 
