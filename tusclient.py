@@ -4,9 +4,9 @@ import time
 import base64
 import logging
 import hashlib
-import httplib
+import http.client
 import requests
-from urlparse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger('TusClient')
 ch = logging.StreamHandler()
@@ -48,7 +48,8 @@ def parse_rfc_7231_datatime(string):
 class TusClient(object):
     version = '1.0.0'
     upload_finished = False
-    upload_max_chunk = 2 ** 10   # 2K
+    max_number_of_tries = 3
+
     checksum_algorisum = 'sha1'
     extensions = [
         'creation',
@@ -61,10 +62,15 @@ class TusClient(object):
         # 'concatenation-unfinished',  # todo
     ]
 
-    def __init__(self, fpath, upload_url, tmp_dir='/tmp/upload', upload_metadata=None):
+    def __init__(self, fpath, upload_url, tmp_dir='tmp-upload', upload_metadata=None, upload_max_chunk=None):
         self.fpath = os.path.abspath(fpath)
         self.tmp_dir = tmp_dir
-        self.info_path = os.path.join(tmp_dir, base64.standard_b64encode(fpath.encode()))
+
+        if upload_max_chunk is None:
+            upload_max_chunk = 2**6 #512K
+
+        self.upload_max_chunk = upload_max_chunk
+        self.info_path = os.path.join(tmp_dir, base64.standard_b64encode(fpath.encode()).decode())
         self.upload_url = upload_url
         assert upload_metadata is None or isinstance(upload_metadata, dict)
         self.upload_metadata = upload_metadata or dict()
@@ -73,24 +79,39 @@ class TusClient(object):
         if not os.path.exists(tmp_dir):
             os.makedirs(tmp_dir)
 
-    def run(self):
+    def upload(self):
+        resposta = None
         try:
+            tentativas = 0
             self.check_upload()
             if self.is_uploading():
                 self.update_values()
             else:
                 self.create_file()
             while not self.upload_finished:
-                self.upload_file_chunk()
+                try:
+                    resposta = self.upload_file_chunk()
+                except Exception as e:
+                    if tentativas > self.max_number_of_tries:
+                        raise
+                    logger.critical(f'Upload failed with: {str(e)}. I will try again')
+                else:
+                    tentativas = 0
+
         except ClientError as e:
             logger.exception('Server return: %s %s', e.status_code, e.reason)
+            return False, resposta
         except Error:
             logger.exception('Server Error')
+            return False, resposta
+        except:
+            return False, resposta
         self.clean_info_file()
+        return True, resposta
 
     def check_upload(self):
         resp = requests.options(self.upload_url)
-        if resp.status_code != httplib.NO_CONTENT:
+        if resp.status_code != http.client.NO_CONTENT:
             raise ClientError(resp.status_code, resp.reason)
 
         tus_versions = resp.headers.get('Tus-Version')
@@ -118,7 +139,7 @@ class TusClient(object):
         if 'tus_extensions' in server_conf and 'creation' not in server_conf['tus_extensions']:
             raise ServerError('Not implemented extension: creation')
         upload_length = os.path.getsize(self.fpath)
-        if 'tus_max_size' in server_conf and upload_length > server_conf['tus_max_size']:
+        if 'tus_max_size' in server_conf and upload_length > int(server_conf['tus_max_size']):
             raise Error('Max-size Exceeded')
         upload_metadata = {
             'filename': os.path.basename(self.fpath),
@@ -131,11 +152,11 @@ class TusClient(object):
         info['last_modify'] = os.stat(self.fpath).st_mtime
         headers = {
             'Tus-Resumable': self.version,
-            'Upload-Length': upload_length,
-            'Upload-Metadata': ','.join(['%s %s' % (k, base64.standard_b64encode(v)) for k, v in upload_metadata.items()])
+            'Upload-Length': str(upload_length),
+            'Upload-Metadata': ','.join(['%s %s' % (k, base64.standard_b64encode(v.encode()).decode()) for k, v in upload_metadata.items()])
         }
         resp = requests.post(self.upload_url, headers=headers)
-        if resp.status_code != httplib.CREATED:
+        if resp.status_code != http.client.CREATED:
             raise ClientError(resp.status_code, resp.reason)
 
         location = resp.headers.get('Location')
@@ -158,7 +179,7 @@ class TusClient(object):
             'Tus-Resumable': self.version,
         }
         resp = requests.head(url, headers=headers)
-        if resp.status_code != httplib.OK:
+        if resp.status_code != http.client.OK:
             raise ClientError(resp.status_code, resp.reason)
         self.update_offset(resp)
         self.update_length(resp)
@@ -173,7 +194,7 @@ class TusClient(object):
         headers = {
             'Tus-Resumable': self.version,
             'Content-Type': 'application/offset+octet-stream',
-            'Upload-Offset': self.values['upload_offset'],
+            'Upload-Offset': str(self.values['upload_offset']),
         }
 
         server_conf = self.values['server_conf']
@@ -182,21 +203,24 @@ class TusClient(object):
             if 'checksum' in server_conf['tus_extensions']:
                 data = f.read(self.upload_max_chunk)
                 checksum = hashlib.sha1(data).digest()
-                headers['Upload-Checksum'] = self.checksum_algorisum + ' ' + base64.standard_b64encode(checksum)
+                headers['Upload-Checksum'] = self.checksum_algorisum + ' ' + base64.standard_b64encode(checksum).decode()
             else:
                 data = f.read()
 
         resp = requests.patch(url, data=data, headers=headers)
-        if resp.status_code == httplib.NO_CONTENT:
+        if resp.status_code == http.client.NO_CONTENT:
             self.update_offset(resp)
             self.update_expires(resp)
             self.update_info_file()
+            logger.info(f"Successfully sent the part {self.values['upload_offset']} of {self.values['upload_length']}")
+
             if self.values['upload_offset'] == self.values['upload_length']:
                 self.upload_finished = True
-            return
-        if resp.status_code == httplib.OK:
+            return None
+        if resp.status_code == http.client.OK:
             self.upload_finished = True
-            return
+            logger.info(f"Successfully uploaded")
+            return resp.text
         raise ClientError(resp.status_code, resp.reason)
 
     def update_offset(self, resp):
@@ -249,7 +273,7 @@ class TusClient(object):
             'Tus-Resumable': self.version,
         }
         resp = requests.delete(url, headers=headers)
-        if resp.status_code != httplib.NO_CONTENT:
+        if resp.status_code != http.client.NO_CONTENT:
             raise ClientError(resp.status_code, resp.reason)
 
     def is_uploading(self):
